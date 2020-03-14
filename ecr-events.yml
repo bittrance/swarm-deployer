@@ -1,0 +1,35 @@
+AWSTemplateFormatVersion: 2010-09-09
+Resources:
+  EcrEventsRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: Successful ECR push events
+      EventPattern:
+        source: [aws.ecr]
+        detail:
+          action-type: [PUSH]
+          result: [SUCCESS]
+      Targets:
+        - Arn: !Sub ${UploadQueue.Arn}
+          Id: upload-queue
+
+  UploadQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: upload-queue
+
+  UploadQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Action:
+              - sqs:SendMessage
+            Principal:
+              Service:
+                - events.amazonaws.com
+            Resource: !Sub ${UploadQueue.Arn}
+      Queues:
+        - upload-queue
