@@ -16,7 +16,7 @@ Resources:
   UploadQueue:
     Type: AWS::SQS::Queue
     Properties:
-      QueueName: upload-queue
+      QueueName: swarm-ecr-deployer-queue
 
   UploadQueuePolicy:
     Type: AWS::SQS::QueuePolicy
@@ -32,4 +32,19 @@ Resources:
                 - events.amazonaws.com
             Resource: !Sub ${UploadQueue.Arn}
       Queues:
-        - upload-queue
+        - swarm-ecr-deployer-queue
+
+  SwarmEcrDeployerUser:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: swarm-ecr-deployer
+      Policies:
+        - PolicyName: deployer-receives-messages
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              Effect: Allow
+              Action:
+                - sqs:GetQueueUrl
+                - sqs:ReceiveMessage
+              Resource: !Sub ${UploadQueue.Arn}

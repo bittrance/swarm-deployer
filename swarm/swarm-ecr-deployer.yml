@@ -1,0 +1,26 @@
+version: '3.7'
+services:
+  deployer:
+    image: bittrance/swarm-ecr-deployer:latest
+    command: -vvv --queue swarm-ecr-deployer-queue
+    environment:
+      AWS_REGION: eu-central-1
+      HOME: /
+    secrets:
+      - source: aws_credentials
+        target: /.aws/credentials
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    deploy:
+      replicas: 2
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 50M
+      placement:
+        preferences:
+          - spread: node.id
+
+secrets:
+  aws_credentials:
+    file: ./aws_credentials
