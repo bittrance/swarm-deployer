@@ -91,7 +91,7 @@ fn main() -> Result<()> {
         .with_context(|| DockerInstantiation)?;
     let sqs = SqsClient::new(Region::default());
     warn!("Listening for ECR events on {}", &opt.queue_name);
-    while true {
+    loop {
         let req = GetQueueUrlRequest {
             queue_name: opt.queue_name.clone(),
             ..Default::default()
@@ -148,6 +148,4 @@ fn main() -> Result<()> {
                 .with_context(|| AckingMessage { queue_url: queue_url.clone(), receipt_handle: receipt_handle })?;
         }
     }
-    warn!("Stop listening for events on {}", &opt.queue_name);
-    Ok(())
 }
