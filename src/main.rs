@@ -82,7 +82,20 @@ fn extract_event_image(event: &str) -> Option<String> {
 }
 
 fn extract_service_image(service: &Service<String>) -> Option<String> {
-    service.spec.task_template.container_spec.clone().unwrap().image
+    service.spec.labels
+        .get(STACK_IMAGE_LABEL)
+        .map(|image| image.to_owned())
+        .or_else(||
+            service.spec.task_template.container_spec
+                .as_ref()
+                .and_then(|spec|
+                    spec.image.clone()
+                        .map(|mut image| {
+                            let at_pos = image.find('@').unwrap_or(usize::max_value());
+                            image.truncate(at_pos);
+                            image
+                        }))
+        )
 }
 
 fn process_one(

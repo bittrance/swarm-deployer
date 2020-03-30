@@ -65,6 +65,27 @@ fn test_extract_service_image_from_container_spec_without_sha() {
 }
 
 #[test]
+fn test_extract_service_image_from_container_spec_with_sha() {
+    let service = service_spec(None, Some("bittrance/ze-image:latest@sha512:12341243".to_owned()));
+    let image = crate::extract_service_image(&service);
+    assert_eq!(Some("bittrance/ze-image:latest".to_owned()), image);
+}
+
+#[test]
+fn test_extract_service_image_from_container_spec_with_label() {
+    let service = service_spec(Some("bittrance/ze-image:latest".to_owned()), None);
+    let image = crate::extract_service_image(&service);
+    assert_eq!(Some("bittrance/ze-image:latest".to_owned()), image);
+}
+
+#[test]
+fn test_extract_service_image_from_container_spec_with_label_with_sha() {
+    let service = service_spec(Some("bittrance/ze-image:latest@sha512:1234".to_owned()), None);
+    let image = crate::extract_service_image(&service);
+    assert_ne!(Some("bittrance/ze-image:latest".to_owned()), image);
+}
+
+#[test]
 fn test_extract_service_image_from_container_with_nothing() {
     let service = service_spec(None, None);
     let image = crate::extract_service_image(&service);
