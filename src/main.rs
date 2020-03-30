@@ -1,10 +1,13 @@
-use bollard::Docker;
 use bollard::errors::Error as BollardError;
 use bollard::service::{ListServicesOptions, Service, UpdateServiceOptions};
+use bollard::Docker;
 use log::{debug, info, warn};
 use rusoto_core::Region;
 use rusoto_core::RusotoError;
-use rusoto_sqs::{DeleteMessageError, DeleteMessageRequest, GetQueueUrlError, GetQueueUrlRequest, Message, ReceiveMessageError, ReceiveMessageRequest, SqsClient, Sqs};
+use rusoto_sqs::{
+    DeleteMessageError, DeleteMessageRequest, GetQueueUrlError, GetQueueUrlRequest, Message,
+    ReceiveMessageError, ReceiveMessageRequest, Sqs, SqsClient,
+};
 use serde_json;
 use snafu::{ResultExt, Snafu};
 use std::collections::HashMap;
@@ -15,7 +18,7 @@ use tokio::runtime::Runtime;
 #[cfg(test)]
 mod tests;
 
-const STACK_IMAGE_LABEL: &'static str = "com.docker.stack.image";
+const STACK_IMAGE_LABEL: &str = "com.docker.stack.image";
 
 #[derive(StructOpt, Debug)]
 #[structopt()]
@@ -34,34 +37,35 @@ struct Opt {
 #[derive(Debug, Snafu)]
 enum SeedyError {
     #[snafu(display("Counld not instantiate a Docker client from environment {}", source))]
-    DockerInstantiation {
-        source: BollardError,
-    },
+    DockerInstantiation { source: BollardError },
     #[snafu(display("Failed to retrieve URL for queue {}: {}", queue_name, source))]
     SqsUrl {
         queue_name: String,
-        source: RusotoError<GetQueueUrlError>
+        source: RusotoError<GetQueueUrlError>,
     },
     #[snafu(display("Polling for ECR events on {} failed: {}", queue_url, source))]
     PollingMessage {
         queue_url: String,
-        source: RusotoError<ReceiveMessageError>
+        source: RusotoError<ReceiveMessageError>,
     },
     #[snafu(display("Could not list services: {}", source))]
-    ServiceListing {
-        source: BollardError
-    },
+    ServiceListing { source: BollardError },
     #[snafu(display("Failed to update image for service {}: {}", service_id, source))]
     UpdatingService {
         service_id: String,
-        source: BollardError
+        source: BollardError,
     },
-    #[snafu(display("Failed to ack (delete) ECR event {} from queue {}: {}", receipt_handle, queue_url, source))]
+    #[snafu(display(
+        "Failed to ack (delete) ECR event {} from queue {}: {}",
+        receipt_handle,
+        queue_url,
+        source
+    ))]
     AckingMessage {
         receipt_handle: String,
         queue_url: String,
-        source: RusotoError<DeleteMessageError>
-    }
+        source: RusotoError<DeleteMessageError>,
+    },
 }
 
 type Result<T, E = SeedyError> = std::result::Result<T, E>;
@@ -69,40 +73,54 @@ type Result<T, E = SeedyError> = std::result::Result<T, E>;
 fn extract_event_image(event: &str) -> Option<String> {
     let parsed: serde_json::Value = serde_json::from_str(event).expect("event to be json");
     let body = parsed.as_object().expect("event to be object");
-    let detail = body.get("detail").expect("event to contain detail object").as_object().expect("a detail object");
-    if detail.get("action-type")?.as_str() == Some("PUSH") && detail.get("result")?.as_str() == Some("SUCCESS") {
+    let detail = body
+        .get("detail")
+        .expect("event to contain detail object")
+        .as_object()
+        .expect("a detail object");
+    if detail.get("action-type")?.as_str() == Some("PUSH")
+        && detail.get("result")?.as_str() == Some("SUCCESS")
+    {
         let account = body.get("account").expect("").as_str()?;
         let region = body.get("region").expect("").as_str()?;
         let repository = detail.get("repository-name").expect("asdf").as_str()?;
         let tag = detail.get("image-tag").expect("").as_str()?;
-        Some(format!("{}.dkr.ecr.{}.amazonaws.com/{}:{}", account, region, repository, tag))
+        Some(format!(
+            "{}.dkr.ecr.{}.amazonaws.com/{}:{}",
+            account, region, repository, tag
+        ))
     } else {
         None
     }
 }
 
 fn extract_service_image(service: &Service<String>) -> Option<String> {
-    service.spec.labels
+    service
+        .spec
+        .labels
         .get(STACK_IMAGE_LABEL)
         .map(|image| image.to_owned())
-        .or_else(||
-            service.spec.task_template.container_spec
+        .or_else(|| {
+            service
+                .spec
+                .task_template
+                .container_spec
                 .as_ref()
-                .and_then(|spec|
-                    spec.image.clone()
-                        .map(|mut image| {
-                            let at_pos = image.find('@').unwrap_or(usize::max_value());
-                            image.truncate(at_pos);
-                            image
-                        }))
-        )
+                .and_then(|spec| {
+                    spec.image.clone().map(|mut image| {
+                        let at_pos = image.find('@').unwrap_or(usize::max_value());
+                        image.truncate(at_pos);
+                        image
+                    })
+                })
+        })
 }
 
 fn process_one(
     message: &Message,
     services_by_image: &mut HashMap<String, Service<String>>,
     docker: &Docker,
-    rt: &mut Runtime
+    rt: &mut Runtime,
 ) -> Result<()> {
     debug!("Processing message {:?}", message);
     if let Some(event) = &message.body {
@@ -113,8 +131,15 @@ fn process_one(
                     version: service.version.index,
                     ..Default::default()
                 };
-                rt.block_on(docker.update_service(&service.id, service.spec.clone(), options, None))
-                    .with_context(|| UpdatingService { service_id: service.id.clone() })?;
+                rt.block_on(docker.update_service(
+                    &service.id,
+                    service.spec.clone(),
+                    options,
+                    None,
+                ))
+                .with_context(|| UpdatingService {
+                    service_id: service.id.clone(),
+                })?;
                 info!("Updated service {} with image {}", &service.id, &image);
             } else {
                 debug!("No service matching image {}", &image);
@@ -139,8 +164,7 @@ fn main() -> Result<()> {
         .unwrap();
 
     let mut rt = Runtime::new().unwrap();
-    let docker = Docker::connect_with_local_defaults()
-        .with_context(|| DockerInstantiation)?;
+    let docker = Docker::connect_with_local_defaults().with_context(|| DockerInstantiation)?;
     let sqs = SqsClient::new(Region::default());
     warn!("Listening for ECR events on {}", &opt.queue_name);
     loop {
@@ -148,18 +172,29 @@ fn main() -> Result<()> {
             queue_name: opt.queue_name.clone(),
             ..Default::default()
         };
-        let queue_url = sqs.get_queue_url(req).sync()
-            .with_context(|| SqsUrl { queue_name: opt.queue_name.clone() })?
-            .queue_url.unwrap();
+        let queue_url = sqs
+            .get_queue_url(req)
+            .sync()
+            .with_context(|| SqsUrl {
+                queue_name: opt.queue_name.clone(),
+            })?
+            .queue_url
+            .unwrap();
         let request = ReceiveMessageRequest {
             queue_url: queue_url.clone(),
             wait_time_seconds: Some(20),
             ..Default::default()
         };
-        let messages = sqs.receive_message(request).sync()
-            .with_context(|| PollingMessage { queue_url: queue_url.clone() })?.messages;
+        let messages = sqs
+            .receive_message(request)
+            .sync()
+            .with_context(|| PollingMessage {
+                queue_url: queue_url.clone(),
+            })?
+            .messages;
         // TODO: Messages may be empty
-        let services = rt.block_on(docker.list_services::<ListServicesOptions<String>, _>(None))
+        let services = rt
+            .block_on(docker.list_services::<ListServicesOptions<String>, _>(None))
             .with_context(|| ServiceListing)?;
         let mut services_by_image: HashMap<String, Service<String>> = services
             .into_iter()
@@ -173,8 +208,12 @@ fn main() -> Result<()> {
                 queue_url: queue_url.clone(),
                 receipt_handle: receipt_handle.clone(),
             };
-            sqs.delete_message(req).sync()
-                .with_context(|| AckingMessage { queue_url: queue_url.clone(), receipt_handle: receipt_handle })?;
+            sqs.delete_message(req)
+                .sync()
+                .with_context(|| AckingMessage {
+                    queue_url: queue_url.clone(),
+                    receipt_handle,
+                })?;
         }
     }
 }

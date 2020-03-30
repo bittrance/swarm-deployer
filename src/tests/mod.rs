@@ -1,4 +1,6 @@
-use bollard::service::{TaskSpecContainerSpec, ObjectVersion, Service, ServiceEndpoint, ServiceSpec, TaskSpec};
+use bollard::service::{
+    ObjectVersion, Service, ServiceEndpoint, ServiceSpec, TaskSpec, TaskSpecContainerSpec,
+};
 use chrono::{TimeZone, Utc};
 use serde_json::json;
 use std::collections::HashMap;
@@ -45,7 +47,9 @@ fn service_spec(label: Option<String>, image: Option<String>) -> Service<String>
             },
             ..Default::default()
         },
-        endpoint: ServiceEndpoint { ..Default::default() },
+        endpoint: ServiceEndpoint {
+            ..Default::default()
+        },
         update_status: None,
     }
 }
@@ -54,7 +58,10 @@ fn service_spec(label: Option<String>, image: Option<String>) -> Service<String>
 fn test_extract_event_image() {
     let body = message_body();
     let image = crate::extract_event_image(&body);
-    assert_eq!(Some("123456789012.dkr.ecr.rp-north-1.amazonaws.com/bittrance/ze-image:latest".to_owned()), image);
+    assert_eq!(
+        Some("123456789012.dkr.ecr.rp-north-1.amazonaws.com/bittrance/ze-image:latest".to_owned()),
+        image
+    );
 }
 
 #[test]
@@ -66,7 +73,10 @@ fn test_extract_service_image_from_container_spec_without_sha() {
 
 #[test]
 fn test_extract_service_image_from_container_spec_with_sha() {
-    let service = service_spec(None, Some("bittrance/ze-image:latest@sha512:12341243".to_owned()));
+    let service = service_spec(
+        None,
+        Some("bittrance/ze-image:latest@sha512:12341243".to_owned()),
+    );
     let image = crate::extract_service_image(&service);
     assert_eq!(Some("bittrance/ze-image:latest".to_owned()), image);
 }
@@ -80,7 +90,10 @@ fn test_extract_service_image_from_container_spec_with_label() {
 
 #[test]
 fn test_extract_service_image_from_container_spec_with_label_with_sha() {
-    let service = service_spec(Some("bittrance/ze-image:latest@sha512:1234".to_owned()), None);
+    let service = service_spec(
+        Some("bittrance/ze-image:latest@sha512:1234".to_owned()),
+        None,
+    );
     let image = crate::extract_service_image(&service);
     assert_ne!(Some("bittrance/ze-image:latest".to_owned()), image);
 }
