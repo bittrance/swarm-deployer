@@ -1651,6 +1651,7 @@ name = "swarm-ecr-deployer"
 version = "0.1.0"
 dependencies = [
  "bollard",
+ "chrono",
  "futures 0.3.4",
  "log",
  "rusoto_core",

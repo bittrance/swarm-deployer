@@ -4,13 +4,18 @@ use bollard::service::{ListServicesOptions, Service, UpdateServiceOptions};
 use log::{debug, info, warn};
 use rusoto_core::Region;
 use rusoto_core::RusotoError;
-use rusoto_sqs::{DeleteMessageError, DeleteMessageRequest, GetQueueUrlError, GetQueueUrlRequest, ReceiveMessageError, ReceiveMessageRequest, SqsClient, Sqs};
+use rusoto_sqs::{DeleteMessageError, DeleteMessageRequest, GetQueueUrlError, GetQueueUrlRequest, Message, ReceiveMessageError, ReceiveMessageRequest, SqsClient, Sqs};
 use serde_json;
 use snafu::{ResultExt, Snafu};
 use std::collections::HashMap;
 use stderrlog;
 use structopt::StructOpt;
 use tokio::runtime::Runtime;
+
+#[cfg(test)]
+mod tests;
+
+const STACK_IMAGE_LABEL: &'static str = "com.docker.stack.image";
 
 #[derive(StructOpt, Debug)]
 #[structopt()]
@@ -61,7 +66,7 @@ enum SeedyError {
 
 type Result<T, E = SeedyError> = std::result::Result<T, E>;
 
-pub fn extract_image(event: &str) -> Option<String> {
+fn extract_event_image(event: &str) -> Option<String> {
     let parsed: serde_json::Value = serde_json::from_str(event).expect("event to be json");
     let body = parsed.as_object().expect("event to be object");
     let detail = body.get("detail").expect("event to contain detail object").as_object().expect("a detail object");
@@ -74,6 +79,40 @@ pub fn extract_image(event: &str) -> Option<String> {
     } else {
         None
     }
+}
+
+fn extract_service_image(service: &Service<String>) -> Option<String> {
+    service.spec.task_template.container_spec.clone().unwrap().image
+}
+
+fn process_one(
+    message: &Message,
+    services_by_image: &mut HashMap<String, Service<String>>,
+    docker: &Docker,
+    rt: &mut Runtime
+) -> Result<()> {
+    debug!("Processing message {:?}", message);
+    if let Some(event) = &message.body {
+        if let Some(image) = extract_event_image(event) {
+            if let Some(service) = services_by_image.get_mut(&image) {
+                service.spec.task_template.force_update = Some(service.version.index as isize);
+                let options = UpdateServiceOptions {
+                    version: service.version.index,
+                    ..Default::default()
+                };
+                rt.block_on(docker.update_service(&service.id, service.spec.clone(), options, None))
+                    .with_context(|| UpdatingService { service_id: service.id.clone() })?;
+                info!("Updated service {} with image {}", &service.id, &image);
+            } else {
+                debug!("No service matching image {}", &image);
+            }
+        } else {
+            debug!("Skipping message {:?} because invalid type", &message.body);
+        }
+    } else {
+        debug!("Encountered empty message {:?}", &message.body);
+    }
+    Ok(())
 }
 
 fn main() -> Result<()> {
@@ -111,34 +150,11 @@ fn main() -> Result<()> {
             .with_context(|| ServiceListing)?;
         let mut services_by_image: HashMap<String, Service<String>> = services
             .into_iter()
-            .map(|service|
-                (service.spec.task_template.container_spec.clone().unwrap().image.unwrap(), service)
-            )
+            .map(|service| (extract_service_image(&service).unwrap(), service))
             .collect();
 
         for message in messages.iter().flatten() {
-            debug!("Processing message {:?}", &message);
-            if let Some(event) = &message.body {
-                if let Some(image) = extract_image(event) {
-                    if let Some(service) = services_by_image.get_mut(&image) {
-                        service.spec.task_template.force_update = Some(service.version.index as isize);
-                        let options = UpdateServiceOptions {
-                            version: service.version.index,
-                            ..Default::default()
-                        };
-                        rt.block_on(docker.update_service(&service.id, service.spec.clone(), options, None))
-                            .with_context(|| UpdatingService { service_id: service.id.clone() })?;
-                        info!("Updated service {} with image {}", &service.id, &image);
-                    } else {
-                        debug!("No service matching image {}", &image);
-                    }
-                } else {
-                    debug!("Skipping message {:?} because invalid type", &message.body);
-                }
-            } else {
-                debug!("Encountered empty message {:?}", &message.body);
-            }
-
+            process_one(&message, &mut services_by_image, &docker, &mut rt)?;
             let receipt_handle = message.receipt_handle.as_ref().expect("No handle");
             let req = DeleteMessageRequest {
                 queue_url: queue_url.clone(),
