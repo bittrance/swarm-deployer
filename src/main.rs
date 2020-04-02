@@ -1,5 +1,5 @@
 use bollard::errors::Error as BollardError;
-use bollard::service::{ListServicesOptions, Service, UpdateServiceOptions};
+use bollard::service::{ListServicesOptions, Service, ServiceSpec, UpdateServiceOptions};
 use bollard::Docker;
 use log::{debug, info, warn};
 use rusoto_core::Region;
@@ -70,9 +70,12 @@ enum SeedyError {
 
 type Result<T, E = SeedyError> = std::result::Result<T, E>;
 
-fn extract_event_image(event: &str) -> Option<String> {
-    let parsed: serde_json::Value = serde_json::from_str(event).expect("event to be json");
-    let body = parsed.as_object().expect("event to be object");
+fn parse_ecr_event(event_str: &str) -> serde_json::Map<String, serde_json::Value> {
+    let parsed: serde_json::Value = serde_json::from_str(event_str).expect("event to be json");
+    parsed.as_object().expect("event to be object").clone()
+}
+
+fn extract_event_image(body: &serde_json::Map<String, serde_json::Value>) -> Option<String> {
     let detail = body
         .get("detail")
         .expect("event to contain detail object")
@@ -116,6 +119,12 @@ fn extract_service_image(service: &Service<String>) -> Option<String> {
         })
 }
 
+fn update_spec(service: &Service<String>) -> ServiceSpec<String> {
+    let mut spec = service.spec.clone();
+    spec.task_template.force_update = Some(service.version.index as isize);
+    spec
+}
+
 fn process_one(
     message: &Message,
     services_by_image: &mut HashMap<String, Service<String>>,
@@ -123,23 +132,19 @@ fn process_one(
     rt: &mut Runtime,
 ) -> Result<()> {
     debug!("Processing message {:?}", message);
-    if let Some(event) = &message.body {
-        if let Some(image) = extract_event_image(event) {
-            if let Some(service) = services_by_image.get_mut(&image) {
-                service.spec.task_template.force_update = Some(service.version.index as isize);
+    if let Some(event_str) = &message.body {
+        let event = parse_ecr_event(event_str);
+        if let Some(image) = extract_event_image(&event) {
+            if let Some(service) = services_by_image.get(&image) {
+                let updated_spec = update_spec(&service);
                 let options = UpdateServiceOptions {
                     version: service.version.index,
                     ..Default::default()
                 };
-                rt.block_on(docker.update_service(
-                    &service.id,
-                    service.spec.clone(),
-                    options,
-                    None,
-                ))
-                .with_context(|| UpdatingService {
-                    service_id: service.id.clone(),
-                })?;
+                rt.block_on(docker.update_service(&service.id, updated_spec, options, None))
+                    .with_context(|| UpdatingService {
+                        service_id: service.id.clone(),
+                    })?;
                 info!("Updated service {} with image {}", &service.id, &image);
             } else {
                 debug!("No service matching image {}", &image);

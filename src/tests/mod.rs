@@ -5,8 +5,8 @@ use chrono::{TimeZone, Utc};
 use serde_json::json;
 use std::collections::HashMap;
 
-fn message_body() -> String {
-    json!({
+fn message_event() -> serde_json::Map<String, serde_json::Value> {
+    let body = json!({
         "version": "0",
         "id": "9baf3833-b73f-1107-0234-3206ab430914",
         "detail-type": "ECR Image Action",
@@ -19,10 +19,12 @@ fn message_body() -> String {
             "action-type": "PUSH",
             "result": "SUCCESS",
             "repository-name": "bittrance/ze-image",
-            "image-digest": "sha256:1ed5cb4a06682b42b0446b3366a38dec5a5402b0e13958f55ffe7f8e33c0d4b4",
+            "image-digest": "sha256:1234",
             "image-tag": "latest"
         }
-    }).to_string()
+    })
+    .to_string();
+    crate::parse_ecr_event(&body)
 }
 
 fn service_spec(label: Option<String>, image: Option<String>) -> Service<String> {
@@ -56,8 +58,8 @@ fn service_spec(label: Option<String>, image: Option<String>) -> Service<String>
 
 #[test]
 fn test_extract_event_image() {
-    let body = message_body();
-    let image = crate::extract_event_image(&body);
+    let event = message_event();
+    let image = crate::extract_event_image(&event);
     assert_eq!(
         Some("123456789012.dkr.ecr.rp-north-1.amazonaws.com/bittrance/ze-image:latest".to_owned()),
         image
