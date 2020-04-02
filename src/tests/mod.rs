@@ -5,7 +5,7 @@ use chrono::{TimeZone, Utc};
 use serde_json::json;
 use std::collections::HashMap;
 
-fn message_event() -> serde_json::Map<String, serde_json::Value> {
+fn message_event() -> crate::Event {
     let body = json!({
         "version": "0",
         "id": "9baf3833-b73f-1107-0234-3206ab430914",
@@ -105,4 +105,27 @@ fn test_extract_service_image_from_container_with_nothing() {
     let service = service_spec(None, None);
     let image = crate::extract_service_image(&service);
     assert_eq!(None, image);
+}
+
+#[test]
+fn test_update_spec_adds_digest() {
+    let service = service_spec(
+        None,
+        Some(
+            "123456789012.dkr.ecr.rp-north-1.amazonaws.com/bittrance/ze-image:latest@sha512:5678"
+                .to_owned(),
+        ),
+    );
+    let event = message_event();
+    let updated_spec = crate::update_spec(&service, &event);
+    assert_eq!(
+        Some(
+            "123456789012.dkr.ecr.rp-north-1.amazonaws.com/bittrance/ze-image:latest@sha256:1234"
+                .to_owned()
+        ),
+        updated_spec
+            .task_template
+            .container_spec
+            .and_then(|spec| spec.image)
+    );
 }

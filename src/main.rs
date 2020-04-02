@@ -68,14 +68,15 @@ enum SeedyError {
     },
 }
 
+type Event = serde_json::Map<String, serde_json::Value>;
 type Result<T, E = SeedyError> = std::result::Result<T, E>;
 
-fn parse_ecr_event(event_str: &str) -> serde_json::Map<String, serde_json::Value> {
+fn parse_ecr_event(event_str: &str) -> Event {
     let parsed: serde_json::Value = serde_json::from_str(event_str).expect("event to be json");
     parsed.as_object().expect("event to be object").clone()
 }
 
-fn extract_event_image(body: &serde_json::Map<String, serde_json::Value>) -> Option<String> {
+fn extract_event_image(body: &Event) -> Option<String> {
     let detail = body
         .get("detail")
         .expect("event to contain detail object")
@@ -119,9 +120,27 @@ fn extract_service_image(service: &Service<String>) -> Option<String> {
         })
 }
 
-fn update_spec(service: &Service<String>) -> ServiceSpec<String> {
+fn update_spec(service: &Service<String>, event: &Event) -> ServiceSpec<String> {
+    let image = extract_event_image(event).expect("image");
+    let digest = event
+        .get("detail")
+        .expect("event to contain detail object")
+        .as_object()
+        .expect("a detail object")
+        .get("image-digest")
+        .expect("image digest")
+        .as_str()
+        .expect("image digest string");
+
     let mut spec = service.spec.clone();
     spec.task_template.force_update = Some(service.version.index as isize);
+    spec.task_template
+        .container_spec
+        .as_mut()
+        .and_then(|mut spec| {
+            spec.image = Some(format!("{}@{}", image, digest));
+            Some(spec)
+        });
     spec
 }
 
@@ -136,7 +155,7 @@ fn process_one(
         let event = parse_ecr_event(event_str);
         if let Some(image) = extract_event_image(&event) {
             if let Some(service) = services_by_image.get(&image) {
-                let updated_spec = update_spec(&service);
+                let updated_spec = update_spec(&service, &event);
                 let options = UpdateServiceOptions {
                     version: service.version.index,
                     ..Default::default()
