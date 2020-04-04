@@ -2,29 +2,19 @@ use bollard::service::{
     ObjectVersion, Service, ServiceEndpoint, ServiceSpec, TaskSpec, TaskSpecContainerSpec,
 };
 use chrono::{TimeZone, Utc};
-use serde_json::json;
 use std::collections::HashMap;
 
-fn message_event() -> crate::Event {
-    let body = json!({
-        "version": "0",
-        "id": "9baf3833-b73f-1107-0234-3206ab430914",
-        "detail-type": "ECR Image Action",
-        "source": "aws.ecr",
-        "account": "123456789012",
-        "time": "2020-03-30T09:56:58Z",
-        "region": "rp-north-1",
-        "resources":[],
-        "detail":{
-            "action-type": "PUSH",
-            "result": "SUCCESS",
-            "repository-name": "bittrance/ze-image",
-            "image-digest": "sha256:1234",
-            "image-tag": "latest"
-        }
-    })
-    .to_string();
-    crate::parse_ecr_event(&body)
+#[cfg(test)]
+mod events;
+
+fn message_event() -> crate::events::Event {
+    crate::events::Event {
+        account_id: String::from("123456789012"),
+        region: String::from("rp-north-1"),
+        repository_name: String::from("bittrance/ze-image"),
+        image_tag: String::from("latest"),
+        image_digest: String::from("sha256:1234"),
+    }
 }
 
 fn service_spec(label: Option<String>, image: Option<String>) -> Service<String> {
@@ -54,16 +44,6 @@ fn service_spec(label: Option<String>, image: Option<String>) -> Service<String>
         },
         update_status: None,
     }
-}
-
-#[test]
-fn test_extract_event_image() {
-    let event = message_event();
-    let image = crate::extract_event_image(&event);
-    assert_eq!(
-        Some("123456789012.dkr.ecr.rp-north-1.amazonaws.com/bittrance/ze-image:latest".to_owned()),
-        image
-    );
 }
 
 #[test]
@@ -116,8 +96,7 @@ fn test_update_spec_adds_digest() {
                 .to_owned(),
         ),
     );
-    let event = message_event();
-    let updated_spec = crate::update_spec(&service, &event);
+    let updated_spec = crate::update_spec(&service, &message_event());
     assert_eq!(
         Some(
             "123456789012.dkr.ecr.rp-north-1.amazonaws.com/bittrance/ze-image:latest@sha256:1234"
