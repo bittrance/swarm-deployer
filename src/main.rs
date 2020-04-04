@@ -1,15 +1,17 @@
 use bollard::errors::Error as BollardError;
 use bollard::service::{ListServicesOptions, Service, ServiceSpec, UpdateServiceOptions};
-use bollard::Docker;
+use bollard::{auth::DockerCredentials, Docker};
 use log::{debug, info, warn};
 use rusoto_core::Region;
 use rusoto_core::RusotoError;
+use rusoto_ecr::{Ecr, EcrClient, GetAuthorizationTokenError, GetAuthorizationTokenRequest};
 use rusoto_sqs::{
     DeleteMessageError, DeleteMessageRequest, GetQueueUrlError, GetQueueUrlRequest, Message,
     ReceiveMessageError, ReceiveMessageRequest, Sqs, SqsClient,
 };
 use snafu::{ResultExt, Snafu};
 use std::collections::HashMap;
+use std::str::FromStr;
 use stderrlog;
 use structopt::StructOpt;
 use tokio::runtime::Runtime;
@@ -66,6 +68,15 @@ enum SeedyError {
         queue_url: String,
         source: RusotoError<DeleteMessageError>,
     },
+    #[snafu(display(
+        "Could not retrieve authentication token for accounts {:?}: {}",
+        registry_ids,
+        source
+    ))]
+    AuthToken {
+        registry_ids: Vec<String>,
+        source: RusotoError<GetAuthorizationTokenError>,
+    },
 }
 
 type Result<T, E = SeedyError> = std::result::Result<T, E>;
@@ -92,6 +103,29 @@ fn extract_service_image(service: &Service<String>) -> Option<String> {
         })
 }
 
+fn ecr_auth_for_event(ecr: &EcrClient, event: &events::Event) -> Result<Option<DockerCredentials>> {
+    let req = GetAuthorizationTokenRequest {
+        registry_ids: Some(vec![event.account_id.clone()]),
+    };
+    let auth_token = ecr
+        .get_authorization_token(req)
+        .sync()
+        .with_context(|| AuthToken {
+            registry_ids: vec![event.account_id.clone()],
+        })?
+        .authorization_data
+        .and_then(|mut auths| {
+            auths
+                .get_mut(0)
+                .map(|auth| auth.authorization_token.take())
+                .map(|auth| DockerCredentials {
+                    auth: auth,
+                    ..Default::default()
+                })
+        });
+    Ok(auth_token)
+}
+
 fn update_spec(service: &Service<String>, event: &events::Event) -> ServiceSpec<String> {
     let mut spec = service.spec.clone();
     spec.task_template.force_update = Some(service.version.index as isize);
@@ -115,12 +149,15 @@ fn process_one(
     if let Some(event_str) = &message.body {
         if let Some(event) = events::parse_ecr_event(event_str) {
             if let Some(service) = services_by_image.get(&event.image()) {
+                let event_region = Region::from_str(&event.region).unwrap();
+                let ecr = EcrClient::new(event_region);
+                let auth_token = ecr_auth_for_event(&ecr, &event)?;
                 let updated_spec = update_spec(&service, &event);
                 let options = UpdateServiceOptions {
                     version: service.version.index,
                     ..Default::default()
                 };
-                rt.block_on(docker.update_service(&service.id, updated_spec, options, None))
+                rt.block_on(docker.update_service(&service.id, updated_spec, options, auth_token))
                     .with_context(|| UpdatingService {
                         service_id: service.id.clone(),
                     })?;
