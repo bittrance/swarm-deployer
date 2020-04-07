@@ -99,7 +99,7 @@ fn test_update_spec_adds_digest() {
     let updated_spec = crate::update_spec(&service, &message_event());
     assert_eq!(
         Some(
-            "123456789012.dkr.ecr.rp-north-1.amazonaws.com/bittrance/ze-image:latest"
+            "123456789012.dkr.ecr.rp-north-1.amazonaws.com/bittrance/ze-image:latest@sha256:1234"
                 .to_owned()
         ),
         updated_spec

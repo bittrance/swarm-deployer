@@ -133,7 +133,7 @@ fn update_spec(service: &Service<String>, event: &events::Event) -> ServiceSpec<
         .container_spec
         .as_mut()
         .and_then(|mut spec| {
-            spec.image = Some(event.image()); //Some(format!("{}@{}", event.image(), event.image_digest));
+            spec.image = Some(format!("{}@{}", event.image(), event.image_digest));
             Some(spec)
         });
     spec
