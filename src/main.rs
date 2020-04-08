@@ -174,9 +174,10 @@ fn process_one(
                         service_id: service.id.clone(),
                     })?;
                 info!(
-                    "Updated service {} with image {}",
+                    "Updated service {} with image {}, {}",
                     &service.id,
-                    &event.image()
+                    &event.image(),
+                    &event.image_digest
                 );
             } else {
                 debug!("No service matching image {}", &event.image());
