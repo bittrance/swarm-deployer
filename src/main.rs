@@ -6,10 +6,7 @@ use log::{debug, info, warn};
 use rusoto_core::Region;
 use rusoto_core::RusotoError;
 use rusoto_ecr::{Ecr, EcrClient, GetAuthorizationTokenError, GetAuthorizationTokenRequest};
-use rusoto_sqs::{
-    DeleteMessageError, DeleteMessageRequest, GetQueueUrlError, GetQueueUrlRequest, Message,
-    ReceiveMessageError, ReceiveMessageRequest, Sqs, SqsClient,
-};
+use rusoto_sqs::{DeleteMessageError, GetQueueUrlError, Message, ReceiveMessageError, SqsClient};
 use snafu::{ResultExt, Snafu};
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -18,6 +15,7 @@ use structopt::StructOpt;
 use tokio::runtime::Runtime;
 
 mod events;
+mod sqs;
 #[cfg(test)]
 mod tests;
 
@@ -25,7 +23,7 @@ const STACK_IMAGE_LABEL: &str = "com.docker.stack.image";
 
 #[derive(StructOpt, Debug)]
 #[structopt()]
-struct Opt {
+pub struct Opt {
     /// SQS queue name to receive ECR events
     #[structopt(short = "q", long = "queue")]
     queue_name: String,
@@ -38,7 +36,7 @@ struct Opt {
 }
 
 #[derive(Debug, Snafu)]
-enum SeedyError {
+pub enum SeedyError {
     #[snafu(display("Counld not instantiate a Docker client from environment {}", source))]
     DockerInstantiation { source: BollardError },
     #[snafu(display("Failed to retrieve URL for queue {}: {}", queue_name, source))]
@@ -153,7 +151,7 @@ fn update_spec(service: &Service<String>, event: &events::Event) -> ServiceSpec<
 
 fn process_one(
     message: &Message,
-    services_by_image: &mut HashMap<String, Service<String>>,
+    services_by_image: &HashMap<String, Service<String>>,
     docker: &Docker,
     rt: &mut Runtime,
 ) -> Result<()> {
@@ -191,6 +189,20 @@ fn process_one(
     Ok(())
 }
 
+fn candidate_services(docker: &Docker, rt: &mut Runtime) -> Result<Vec<Service<String>>> {
+    let services = rt
+        .block_on(docker.list_services::<ListServicesOptions<String>, _>(None))
+        .with_context(|| ServiceListing)?;
+    Ok(services)
+}
+
+fn build_index(services: Vec<Service<String>>) -> HashMap<String, Service<String>> {
+    services
+        .into_iter()
+        .map(|service| (extract_service_image(&service).unwrap(), service))
+        .collect()
+}
+
 fn main() -> Result<()> {
     let opt = Opt::from_args();
     stderrlog::new()
@@ -206,52 +218,13 @@ fn main() -> Result<()> {
     let sqs = SqsClient::new(Region::default());
     warn!("Listening for ECR events on {}", &opt.queue_name);
     loop {
-        let req = GetQueueUrlRequest {
-            queue_name: opt.queue_name.clone(),
-            ..Default::default()
-        };
-        let queue_url = sqs
-            .get_queue_url(req)
-            .sync()
-            .with_context(|| SqsUrl {
-                queue_name: opt.queue_name.clone(),
-            })?
-            .queue_url
-            .unwrap();
-        let request = ReceiveMessageRequest {
-            queue_url: queue_url.clone(),
-            wait_time_seconds: Some(20),
-            ..Default::default()
-        };
-        let messages = sqs
-            .receive_message(request)
-            .sync()
-            .with_context(|| PollingMessage {
-                queue_url: queue_url.clone(),
-            })?
-            .messages;
+        let messages = sqs::poll_messages(&sqs, &opt)?;
         // TODO: Messages may be empty
-        let services = rt
-            .block_on(docker.list_services::<ListServicesOptions<String>, _>(None))
-            .with_context(|| ServiceListing)?;
-        let mut services_by_image: HashMap<String, Service<String>> = services
-            .into_iter()
-            .map(|service| (extract_service_image(&service).unwrap(), service))
-            .collect();
-
-        for message in messages.iter().flatten() {
-            process_one(&message, &mut services_by_image, &docker, &mut rt)?;
-            let receipt_handle = message.receipt_handle.as_ref().expect("No handle");
-            let req = DeleteMessageRequest {
-                queue_url: queue_url.clone(),
-                receipt_handle: receipt_handle.clone(),
-            };
-            sqs.delete_message(req)
-                .sync()
-                .with_context(|| AckingMessage {
-                    queue_url: queue_url.clone(),
-                    receipt_handle,
-                })?;
+        let services = candidate_services(&docker, &mut rt)?;
+        let services_by_image = build_index(services);
+        for message in messages.iter() {
+            process_one(message, &services_by_image, &docker, &mut rt)?;
+            sqs::delete_message(&sqs, &message, &opt)?;
         }
     }
 }
