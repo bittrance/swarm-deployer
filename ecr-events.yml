@@ -43,8 +43,16 @@ Resources:
           PolicyDocument:
             Version: 2012-10-17
             Statement:
-              Effect: Allow
-              Action:
-                - sqs:GetQueueUrl
-                - sqs:ReceiveMessage
-              Resource: !Sub ${UploadQueue.Arn}
+              - Effect: Allow
+                Action:
+                  - sqs:GetQueueUrl
+                  - sqs:ReceiveMessage
+                  - sqs:DeleteMessage
+                Resource: !Sub ${UploadQueue.Arn}
+              - Effect: Allow
+                Action:
+                  - ecr:GetAuthorizationToken
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:BatchGetImage
+                Resource: "*"

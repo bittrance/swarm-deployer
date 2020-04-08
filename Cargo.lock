@@ -1664,6 +1664,7 @@ checksum = "2d67a5a62ba6e01cb2192ff309324cb4875d0c451d55fe2319433abe7a05a8ee"
 name = "swarm-ecr-deployer"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "bollard",
  "chrono",
  "futures 0.3.4",

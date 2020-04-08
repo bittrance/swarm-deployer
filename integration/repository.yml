@@ -1,0 +1,29 @@
+AWSTemplateFormatVersion: 2010-09-09
+Resources:
+  ExampleRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: swarm-ecr-deployer/example-repository
+  ExampleUploader:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: swarm-ecr-deployer-example-publisher
+      Policies:
+        - PolicyName: publish-images
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ecr:GetAuthorizationToken
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:BatchGetImage
+                  - ecr:CompleteLayerUpload
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:InitiateLayerUpload
+                  - ecr:PutImage
+                  - ecr:UploadLayerPart
+                Resource: !Sub ${ExampleRepository.Arn}
