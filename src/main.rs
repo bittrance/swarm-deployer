@@ -1,3 +1,4 @@
+use base64;
 use bollard::errors::Error as BollardError;
 use bollard::service::{ListServicesOptions, Service, ServiceSpec, UpdateServiceOptions};
 use bollard::{auth::DockerCredentials, Docker};
@@ -103,6 +104,20 @@ fn extract_service_image(service: &Service<String>) -> Option<String> {
         })
 }
 
+fn docker_credentials_from_auth_token(auth_token: String) -> DockerCredentials {
+    let decoded = String::from_utf8(
+        base64::decode(&auth_token)
+            .unwrap_or_else(|_| panic!("Failed base64 decode from ECR: {}", &auth_token)),
+    )
+    .unwrap_or_else(|_| panic!("Failed base64 decode from ECR: {}", &auth_token));
+    let parts: Vec<&str> = decoded.splitn(2, ':').collect();
+    DockerCredentials {
+        username: Some(parts[0].to_owned()),
+        password: Some(parts[1].to_owned()),
+        ..Default::default()
+    }
+}
+
 fn ecr_auth_for_event(ecr: &EcrClient, event: &events::Event) -> Result<Option<DockerCredentials>> {
     let req = GetAuthorizationTokenRequest {
         registry_ids: Some(vec![event.account_id.clone()]),
@@ -117,11 +132,8 @@ fn ecr_auth_for_event(ecr: &EcrClient, event: &events::Event) -> Result<Option<D
         .and_then(|mut auths| {
             auths
                 .get_mut(0)
-                .map(|auth| auth.authorization_token.take())
-                .map(|auth| DockerCredentials {
-                    auth: auth,
-                    ..Default::default()
-                })
+                .map(|auth| auth.authorization_token.take().unwrap())
+                .map(docker_credentials_from_auth_token)
         });
     Ok(auth_token)
 }

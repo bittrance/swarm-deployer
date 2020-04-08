@@ -1,3 +1,4 @@
+use base64;
 use bollard::service::{
     ObjectVersion, Service, ServiceEndpoint, ServiceSpec, TaskSpec, TaskSpecContainerSpec,
 };
@@ -85,6 +86,14 @@ fn test_extract_service_image_from_container_with_nothing() {
     let service = service_spec(None, None);
     let image = crate::extract_service_image(&service);
     assert_eq!(None, image);
+}
+
+#[test]
+fn test_docker_credentials_from_auth_token() {
+    let encoded = base64::encode("foo:bar");
+    let credentials = crate::docker_credentials_from_auth_token(encoded);
+    assert_eq!(Some("foo".to_owned()), credentials.username);
+    assert_eq!(Some("bar".to_owned()), credentials.password);
 }
 
 #[test]
