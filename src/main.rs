@@ -7,7 +7,7 @@ use rusoto_core::Region;
 use rusoto_core::RusotoError;
 use rusoto_ecr::{Ecr, EcrClient, GetAuthorizationTokenError, GetAuthorizationTokenRequest};
 use rusoto_sqs::{DeleteMessageError, GetQueueUrlError, Message, ReceiveMessageError, SqsClient};
-use snafu::{ResultExt, Snafu};
+use snafu::{ensure, ResultExt, Snafu};
 use std::collections::HashMap;
 use std::str::FromStr;
 use stderrlog;
@@ -24,6 +24,9 @@ const STACK_IMAGE_LABEL: &str = "com.docker.stack.image";
 #[derive(StructOpt, Debug)]
 #[structopt()]
 pub struct Opt {
+    /// Update only labelled services (default is to consider all services)
+    #[structopt(long = "filter-label", parse(try_from_str = split_label))]
+    filter_label: Option<(String, String)>,
     /// SQS queue name to receive ECR events
     #[structopt(short = "q", long = "queue")]
     queue_name: String,
@@ -37,6 +40,8 @@ pub struct Opt {
 
 #[derive(Debug, Snafu)]
 pub enum SeedyError {
+    #[snafu(display("Filter label {} expected to be on format key=value", label))]
+    LabelFilterError { label: String },
     #[snafu(display("Counld not instantiate a Docker client from environment {}", source))]
     DockerInstantiation { source: BollardError },
     #[snafu(display("Failed to retrieve URL for queue {}: {}", queue_name, source))]
@@ -79,6 +84,17 @@ pub enum SeedyError {
 }
 
 type Result<T, E = SeedyError> = std::result::Result<T, E>;
+
+fn split_label(input: &str) -> Result<(String, String)> {
+    let parts: Vec<&str> = input.splitn(2, '=').collect();
+    ensure!(
+        parts.len() == 2,
+        LabelFilterError {
+            label: input.to_owned()
+        }
+    );
+    Ok((parts[0].to_owned(), parts[1].to_owned()))
+}
 
 fn extract_service_image(service: &Service<String>) -> Option<String> {
     service
@@ -196,9 +212,21 @@ fn candidate_services(docker: &Docker, rt: &mut Runtime) -> Result<Vec<Service<S
     Ok(services)
 }
 
-fn build_index(services: Vec<Service<String>>) -> HashMap<String, Service<String>> {
+fn build_service_index(
+    services: Vec<Service<String>>,
+    opt: &Opt,
+) -> HashMap<String, Service<String>> {
     services
         .into_iter()
+        .filter(|service| match &opt.filter_label {
+            Some((key, value)) => service
+                .spec
+                .labels
+                .get(key)
+                .filter(|v| *v == value)
+                .is_some(),
+            None => true,
+        })
         .map(|service| (extract_service_image(&service).unwrap(), service))
         .collect()
 }
@@ -221,7 +249,7 @@ fn main() -> Result<()> {
         let messages = sqs::poll_messages(&sqs, &opt)?;
         // TODO: Messages may be empty
         let services = candidate_services(&docker, &mut rt)?;
-        let services_by_image = build_index(services);
+        let services_by_image = build_service_index(services, &opt);
         for message in messages.iter() {
             process_one(message, &services_by_image, &docker, &mut rt)?;
             sqs::delete_message(&sqs, &message, &opt)?;
