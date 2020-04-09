@@ -25,17 +25,14 @@ const STACK_IMAGE_LABEL: &str = "com.docker.stack.image";
 #[structopt()]
 pub struct Opt {
     /// Update only labelled services (default is to consider all services)
-    #[structopt(long = "filter-label", parse(try_from_str = split_label))]
+    #[structopt(long = "filter-label", env = "DEPLOYER_FILTER_LABEL", parse(try_from_str = split_label))]
     filter_label: Option<(String, String)>,
     /// SQS queue name to receive ECR events
-    #[structopt(short = "q", long = "queue")]
+    #[structopt(short = "q", long = "queue", env = "DEPLOYER_QUEUE")]
     queue_name: String,
-    /// Silence all output
-    #[structopt(long = "quiet")]
-    quiet: bool,
-    /// Verbose mode (-v, -vv, -vvv, etc)
-    #[structopt(short = "v", long = "verbose", parse(from_occurrences))]
-    verbose: usize,
+    /// Verbose mode (trace, debug, info, warn, err)
+    #[structopt(long = "log-level", default_value = "WARN", env = "DEPLOYER_LOG_LEVEL")]
+    log_level: log::Level,
 }
 
 #[derive(Debug, Snafu)]
@@ -235,8 +232,7 @@ fn main() -> Result<()> {
     let opt = Opt::from_args();
     stderrlog::new()
         .module(module_path!())
-        .quiet(opt.quiet)
-        .verbosity(opt.verbose)
+        .verbosity((opt.log_level as usize) - 1)
         .timestamp(stderrlog::Timestamp::Second)
         .init()
         .unwrap();
