@@ -2,6 +2,7 @@ use base64;
 use bollard::errors::Error as BollardError;
 use bollard::service::{ListServicesOptions, Service, ServiceSpec, UpdateServiceOptions};
 use bollard::{auth::DockerCredentials, Docker};
+use futures::future::FutureExt;
 use log::{debug, info, warn};
 use rusoto_core::Region;
 use rusoto_core::RusotoError;
@@ -12,7 +13,6 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use stderrlog;
 use structopt::StructOpt;
-use tokio::runtime::Runtime;
 
 mod events;
 mod sqs;
@@ -132,24 +132,28 @@ fn docker_credentials_from_auth_token(auth_token: String) -> DockerCredentials {
     }
 }
 
-fn ecr_auth_for_event(ecr: &EcrClient, event: &events::Event) -> Result<Option<DockerCredentials>> {
+async fn ecr_auth_for_event(
+    ecr: &EcrClient,
+    event: &events::Event,
+) -> Result<Option<DockerCredentials>> {
     let req = GetAuthorizationTokenRequest {
         registry_ids: Some(vec![event.account_id.clone()]),
     };
-    let auth_token = ecr
-        .get_authorization_token(req)
-        .sync()
-        .with_context(|| AuthToken {
-            registry_ids: vec![event.account_id.clone()],
-        })?
-        .authorization_data
-        .and_then(|mut auths| {
-            auths
-                .get_mut(0)
-                .map(|auth| auth.authorization_token.take().unwrap())
-                .map(docker_credentials_from_auth_token)
-        });
-    Ok(auth_token)
+    ecr.get_authorization_token(req)
+        .map(|res| {
+            res.map(|res| {
+                res.authorization_data.and_then(|mut auths| {
+                    auths
+                        .get_mut(0)
+                        .map(|auth| auth.authorization_token.take().unwrap())
+                        .map(docker_credentials_from_auth_token)
+                })
+            })
+            .with_context(|| AuthToken {
+                registry_ids: vec![event.account_id.clone()],
+            })
+        })
+        .await
 }
 
 fn update_spec(service: &Service<String>, event: &events::Event) -> ServiceSpec<String> {
@@ -165,11 +169,10 @@ fn update_spec(service: &Service<String>, event: &events::Event) -> ServiceSpec<
     spec
 }
 
-fn process_one(
+async fn process_one(
     message: &Message,
     services_by_image: &HashMap<String, Service<String>>,
     docker: &Docker,
-    rt: &mut Runtime,
 ) -> Result<()> {
     debug!("Processing message {:?}", message);
     if let Some(event_str) = &message.body {
@@ -177,16 +180,20 @@ fn process_one(
             if let Some(service) = services_by_image.get(&event.image()) {
                 let event_region = Region::from_str(&event.region).unwrap();
                 let ecr = EcrClient::new(event_region);
-                let auth_token = ecr_auth_for_event(&ecr, &event)?;
+                let auth_token = ecr_auth_for_event(&ecr, &event).await?;
                 let updated_spec = update_spec(&service, &event);
                 let options = UpdateServiceOptions {
                     version: service.version.index,
                     ..Default::default()
                 };
-                rt.block_on(docker.update_service(&service.id, updated_spec, options, auth_token))
-                    .with_context(|| UpdatingService {
-                        service_id: service.id.clone(),
-                    })?;
+                docker
+                    .update_service(&service.id, updated_spec, options, auth_token)
+                    .map(|res| {
+                        res.with_context(|| UpdatingService {
+                            service_id: service.id.clone(),
+                        })
+                    })
+                    .await?;
                 info!(
                     "Updated service {} with image {}, {}",
                     &service.id,
@@ -205,11 +212,11 @@ fn process_one(
     Ok(())
 }
 
-fn candidate_services(docker: &Docker, rt: &mut Runtime) -> Result<Vec<Service<String>>> {
-    let services = rt
-        .block_on(docker.list_services::<ListServicesOptions<String>, _>(None))
-        .with_context(|| ServiceListing)?;
-    Ok(services)
+async fn candidate_services(docker: &Docker) -> Result<Vec<Service<String>>> {
+    docker
+        .list_services::<ListServicesOptions<String>, _>(None)
+        .map(|res| res.with_context(|| ServiceListing))
+        .await
 }
 
 fn build_service_index(
@@ -231,7 +238,8 @@ fn build_service_index(
         .collect()
 }
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     let opt = Opt::from_args();
     stderrlog::new()
         .module(module_path!())
@@ -241,18 +249,17 @@ fn main() -> Result<()> {
         .init()
         .unwrap();
 
-    let mut rt = Runtime::new().unwrap();
     let docker = Docker::connect_with_local_defaults().with_context(|| DockerInstantiation)?;
     let sqs = SqsClient::new(Region::default());
     warn!("Listening for ECR events on {}", &opt.queue_name);
     loop {
-        let messages = sqs::poll_messages(&sqs, &opt)?;
+        let messages = sqs::poll_messages(&sqs, &opt).await?;
         // TODO: Messages may be empty
-        let services = candidate_services(&docker, &mut rt)?;
+        let services = candidate_services(&docker).await?;
         let services_by_image = build_service_index(services, &opt);
         for message in messages.iter() {
-            process_one(message, &services_by_image, &docker, &mut rt)?;
-            sqs::delete_message(&sqs, &message, &opt)?;
+            process_one(message, &services_by_image, &docker).await?;
+            sqs::delete_message(&sqs, &message, &opt).await?;
         }
     }
 }
