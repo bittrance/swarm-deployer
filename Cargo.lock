@@ -145,7 +145,7 @@ dependencies = [
 [[package]]
 name = "bollard"
 version = "0.5.0"
-source = "git+https://github.com/bittrance/bollard?branch=services-support#8f35957b277da3090bfe904936de86ddb9903711"
+source = "git+https://github.com/fussybeaver/bollard?branch=ND-services-support#d9487760e99d2a566f7c69c5aa388b386da35789"
 dependencies = [
  "arrayvec",
  "base64 0.11.0",
