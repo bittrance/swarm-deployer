@@ -17,7 +17,7 @@ jobs:
       - uses: actions-rs/cargo@v1
         with:
           command: clippy
-      - uses: elgohr/Publish-Docker-Github-Action@master
+      - uses: elgohr/Publish-Docker-Github-Action@v5
         with:
           name: bittrance/swarm-ecr-deployer
           username: ${{ secrets.DOCKER_USERNAME }}
